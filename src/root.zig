@@ -14,8 +14,14 @@ pub const SDK = struct {
     http_client: http.Client,
 
     /// Create a new SDK.
-    fn new(allocator: Allocator, api_token: []const u8) SDK {
+    fn init(allocator: Allocator, api_token: []const u8) SDK {
         return SDK{ .allocator = allocator, .api_token = api_token, .http_client = http.Client{ .allocator = allocator } };
+    }
+
+    test init {
+        var sdk = SDK.init(std.testing.allocator, "token");
+        defer sdk.deinit();
+        try std.testing.expectEqual(sdk.api_token, "token");
     }
 
     /// Deinitialize the SDK.
@@ -52,26 +58,20 @@ pub const SDK = struct {
 
         return datasets;
     }
+
+    test getDatasets {
+        const allocator = std.testing.allocator;
+
+        const api_token = try std.process.getEnvVarOwned(allocator, "AXIOM_TOKEN");
+        defer allocator.free(api_token);
+
+        var sdk = SDK.init(allocator, api_token);
+        defer sdk.deinit();
+
+        const datasets = try sdk.getDatasets();
+        defer allocator.free(datasets);
+
+        try std.testing.expect(datasets.len > 0);
+        try std.testing.expectEqualStrings("_traces", datasets[0].name);
+    }
 };
-
-test "SDK.init/deinit" {
-    var sdk = SDK.new(std.testing.allocator, "token");
-    defer sdk.deinit();
-    try std.testing.expectEqual(sdk.api_token, "token");
-}
-
-test "getDatasets" {
-    const allocator = std.testing.allocator;
-
-    const api_token = try std.process.getEnvVarOwned(allocator, "AXIOM_TOKEN");
-    defer allocator.free(api_token);
-
-    var sdk = SDK.new(allocator, api_token);
-    defer sdk.deinit();
-
-    const datasets = try sdk.getDatasets();
-    defer allocator.free(datasets);
-
-    try std.testing.expect(datasets.len > 0);
-    try std.testing.expectEqualStrings("_traces", datasets[0].name);
-}
