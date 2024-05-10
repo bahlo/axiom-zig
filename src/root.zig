@@ -61,27 +61,30 @@ pub const SDK = struct {
         try request.wait();
 
         const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb
+        defer self.allocator.free(body);
 
-        const arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
-        const datasets = try json.parseFromSliceLeaky([]Dataset, arena_allocator, body, .{});
+        var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
+        const datasets = try json.parseFromSliceLeaky([]Dataset, arena_allocator.allocator(), body, .{
+            .allocate = .alloc_always,
+        });
 
         return Value([]Dataset){ .value = datasets, .allocator = arena_allocator };
     }
-
-    test getDatasets {
-        const allocator = std.testing.allocator;
-
-        const api_token = try std.process.getEnvVarOwned(allocator, "AXIOM_TOKEN");
-        defer allocator.free(api_token);
-
-        var sdk = SDK.init(allocator, api_token);
-        defer sdk.deinit();
-
-        const datasets_res = try sdk.getDatasets();
-        defer datasets_res.deinit();
-        const datasets = datasets_res.value;
-
-        try std.testing.expect(datasets.len > 0);
-        try std.testing.expectEqualStrings("_traces", datasets[0].name);
-    }
 };
+
+test "getDatasets" {
+    const allocator = std.testing.allocator;
+
+    const api_token = try std.process.getEnvVarOwned(allocator, "AXIOM_TOKEN");
+    defer allocator.free(api_token);
+
+    var sdk = SDK.init(allocator, api_token);
+    defer sdk.deinit();
+
+    var datasets_res = try sdk.getDatasets();
+    defer datasets_res.deinit();
+    const datasets = datasets_res.value;
+
+    try std.testing.expect(datasets.len > 0);
+    try std.testing.expectEqualStrings("_traces", datasets[0].name);
+}
