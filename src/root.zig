@@ -35,7 +35,7 @@ pub const SDK = struct {
         // TODO: Store base URL in global const or struct
         const url = comptime std.Uri.parse("https://api.axiom.co/v2/datasets") catch unreachable;
 
-        var server_header_buffer: [4096]u8 = undefined; // Is 4kb enough?
+        var server_header_buffer: [8192]u8 = undefined; // 8kb
         var request = try self.http_client.open(.GET, url, .{
             .server_header_buffer = &server_header_buffer,
         });
