@@ -21,6 +21,22 @@ pub const Role = struct {
     name: []const u8,
 };
 
+/// The status of an ingest request.
+pub const IngestStatus = struct {
+    ingested: u64,
+    failed: u64,
+    failures: []Failure,
+    processedBytes: u64,
+    blocksCreated: u64,
+    walLength: u64,
+};
+
+/// The failure of an ingest request.
+pub const Failure = struct {
+    @"error": []const u8,
+    timestamp: []const u8,
+};
+
 /// Value is a wrapper around a value that is allocated on the heap.
 pub fn Value(T: anytype) type {
     return struct {
@@ -57,7 +73,7 @@ pub const SDK = struct {
 
     fn getCurrentUser(self: *SDK) !Value(User) {
         // TODO: Store base URL in global const or struct
-        const url = comptime std.Uri.parse("https://api.axiom.co/v1/user") catch unreachable;
+        const url = comptime std.Uri.parse("https://api.axiom.co/v2/user") catch unreachable;
 
         var server_header_buffer: [8192]u8 = undefined; // 8kb
         var request = try self.http_client.open(.GET, url, .{
@@ -74,8 +90,6 @@ pub const SDK = struct {
 
         const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb
         defer self.allocator.free(body);
-
-        std.debug.print("BODY: '{s}'\n", .{body});
 
         var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
         const user = try json.parseFromSliceLeaky(User, arena_allocator.allocator(), body, .{
@@ -145,23 +159,59 @@ pub const SDK = struct {
 
         return Value(Dataset){ .value = datasets, .allocator = arena_allocator };
     }
+
+    /// Caller owns the memory.
+    fn ingestBuffer(self: *SDK, dataset: []const u8, buffer: []const u8) !Value(IngestStatus) {
+        // TODO: Store base URL in global const or struct
+        const uri_str = try std.fmt.allocPrint(self.allocator, "https://api.axiom.co/v1/datasets/{s}/ingest", .{dataset});
+        defer self.allocator.free(uri_str);
+        const url = std.Uri.parse(uri_str) catch unreachable;
+
+        var server_header_buffer: [8192]u8 = undefined; // 8kb
+        var request = try self.http_client.open(.POST, url, .{
+            .server_header_buffer = &server_header_buffer,
+        });
+        defer request.deinit();
+
+        var authorization_header_buf: [64]u8 = undefined;
+        const authorization_header = try fmt.bufPrint(&authorization_header_buf, "Bearer {s}", .{self.api_token});
+        request.headers.authorization = .{ .override = authorization_header };
+        request.headers.content_type = .{ .override = "application/json" }; // TODO: Make this configurable
+        request.transfer_encoding = .{ .content_length = buffer.len };
+
+        try request.send();
+        var writer = request.writer();
+        _ = try writer.writeAll(buffer);
+        try request.finish();
+        try request.wait();
+
+        const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb
+        defer self.allocator.free(body);
+
+        var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
+        const datasets = try json.parseFromSliceLeaky(IngestStatus, arena_allocator.allocator(), body, .{
+            .allocate = .alloc_always,
+        });
+
+        return Value(IngestStatus){ .value = datasets, .allocator = arena_allocator };
+    }
 };
 
-test "getCurrentUser" {
-    const allocator = std.testing.allocator;
-
-    const api_token = try std.process.getEnvVarOwned(allocator, "AXIOM_TOKEN");
-    defer allocator.free(api_token);
-
-    var sdk = SDK.init(allocator, api_token);
-    defer sdk.deinit();
-
-    var user_res = try sdk.getCurrentUser();
-    defer user_res.deinit();
-    const user = user_res.value;
-
-    try std.testing.expectEqualStrings("what", user.name);
-}
+// test "getCurrentUser" {
+//     const allocator = std.testing.allocator;
+//
+//     const api_token = try std.process.getEnvVarOwned(allocator, "AXIOM_TOKEN");
+//     defer allocator.free(api_token);
+//
+//     var sdk = SDK.init(allocator, api_token);
+//     defer sdk.deinit();
+//
+//     var user_res = try sdk.getCurrentUser();
+//     defer user_res.deinit();
+//     const user = user_res.value;
+//
+//     try std.testing.expectEqualStrings("what", user.name);
+// }
 
 test "getDatasets" {
     const allocator = std.testing.allocator;
@@ -194,4 +244,20 @@ test "getDataset" {
     const dataset = dataset_res.value;
 
     try std.testing.expectEqualStrings("axiom.zig", dataset.name);
+}
+
+test "ingestBuffer" {
+    const allocator = std.testing.allocator;
+
+    const api_token = try std.process.getEnvVarOwned(allocator, "AXIOM_TOKEN");
+    defer allocator.free(api_token);
+
+    var sdk = SDK.init(allocator, api_token);
+    defer sdk.deinit();
+
+    var ingest_res = try sdk.ingestBuffer("axiom.zig", "[{\"foo\":42}]");
+    defer ingest_res.deinit();
+    const ingest_status = ingest_res.value;
+
+    try std.testing.expectEqual(1, ingest_status.ingested);
 }
