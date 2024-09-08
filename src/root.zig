@@ -70,6 +70,37 @@ pub const SDK = struct {
 
         return Value([]Dataset){ .value = datasets, .allocator = arena_allocator };
     }
+
+    /// Caller owns the memory.
+    fn getDataset(self: *SDK, name: []const u8) !Value(Dataset) {
+        // TODO: Store base URL in global const or struct
+        const uri_str = try std.fmt.allocPrint(self.allocator, "https://api.axiom.co/v2/datasets/{s}", .{name});
+        defer self.allocator.free(uri_str);
+        const url = std.Uri.parse(uri_str) catch unreachable;
+
+        var server_header_buffer: [8192]u8 = undefined; // 8kb
+        var request = try self.http_client.open(.GET, url, .{
+            .server_header_buffer = &server_header_buffer,
+        });
+        defer request.deinit();
+
+        var authorization_header_buf: [64]u8 = undefined;
+        const authorization_header = try fmt.bufPrint(&authorization_header_buf, "Bearer {s}", .{self.api_token});
+        request.headers.authorization = .{ .override = authorization_header };
+
+        try request.send();
+        try request.wait();
+
+        const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb
+        defer self.allocator.free(body);
+
+        var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
+        const datasets = try json.parseFromSliceLeaky(Dataset, arena_allocator.allocator(), body, .{
+            .allocate = .alloc_always,
+        });
+
+        return Value(Dataset){ .value = datasets, .allocator = arena_allocator };
+    }
 };
 
 test "getDatasets" {
@@ -87,4 +118,20 @@ test "getDatasets" {
 
     try std.testing.expect(datasets.len > 0);
     try std.testing.expectEqualStrings("_traces", datasets[0].name);
+}
+
+test "getDataset" {
+    const allocator = std.testing.allocator;
+
+    const api_token = try std.process.getEnvVarOwned(allocator, "AXIOM_TOKEN");
+    defer allocator.free(api_token);
+
+    var sdk = SDK.init(allocator, api_token);
+    defer sdk.deinit();
+
+    var dataset_res = try sdk.getDataset("axiom.zig");
+    defer dataset_res.deinit();
+    const dataset = dataset_res.value;
+
+    try std.testing.expectEqualStrings("axiom.zig", dataset.name);
 }
