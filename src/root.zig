@@ -49,6 +49,19 @@ pub fn Value(T: anytype) type {
     };
 }
 
+/// The content type for ingest_buffer.
+pub const IngestContentType = enum { json, ndjson };
+
+/// The encoding for ingest_buffer.
+pub const IngestContentEncoding = enum { identity, gzip };
+
+/// IngestOptions can be passed to ingest requests to set content-type and/or
+/// content-encoding headers.
+pub const IngestOptions = struct {
+    content_type: IngestContentType = .json,
+    content_encoding: IngestContentEncoding = .identity,
+};
+
 /// SDK provides methods to interact with the Axiom API.
 pub const SDK = struct {
     allocator: Allocator,
@@ -122,7 +135,7 @@ pub const SDK = struct {
     }
 
     /// Caller owns the memory.
-    fn ingestBuffer(self: *SDK, dataset: []const u8, buffer: []const u8) !Value(IngestStatus) {
+    fn ingestBuffer(self: *SDK, dataset: []const u8, buffer: []const u8, opts: IngestOptions) !Value(IngestStatus) {
         // TODO: Store base URL in global const or struct
         const uri_str = try std.fmt.allocPrint(self.allocator, "https://api.axiom.co/v1/datasets/{s}/ingest", .{dataset});
         defer self.allocator.free(uri_str);
@@ -137,7 +150,25 @@ pub const SDK = struct {
         var authorization_header_buf: [64]u8 = undefined;
         const authorization_header = try fmt.bufPrint(&authorization_header_buf, "Bearer {s}", .{self.api_token});
         request.headers.authorization = .{ .override = authorization_header };
-        request.headers.content_type = .{ .override = "application/json" }; // TODO: Make this configurable
+        switch (opts.content_type) {
+            .json => {
+                request.headers.content_type = .{ .override = "application/json" };
+            },
+            .ndjson => {
+                request.headers.content_type = .{ .override = "application/x-ndjson" };
+            },
+        }
+        switch (opts.content_encoding) {
+            .gzip => {
+                request.extra_headers = &[_]http.Header{
+                    .{
+                        .name = "content-encoding",
+                        .value = "gzip",
+                    },
+                };
+            },
+            .identity => {}, // nop
+        }
         request.transfer_encoding = .{ .content_length = buffer.len };
 
         try request.send();
@@ -216,7 +247,7 @@ test "ingestBuffer" {
     var sdk = SDK.init(allocator, api_token);
     defer sdk.deinit();
 
-    var ingest_res = try sdk.ingestBuffer("axiom.zig", "[{\"foo\":42}]");
+    var ingest_res = try sdk.ingestBuffer("axiom.zig", "[{\"foo\":42}]", .{});
     defer ingest_res.deinit();
     const ingest_status = ingest_res.value;
 
