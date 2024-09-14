@@ -71,10 +71,9 @@ pub const SDK = struct {
         self.http_client.deinit();
     }
 
-    fn getCurrentUser(self: *SDK) !Value(User) {
-        // TODO: Store base URL in global const or struct
-        const url = comptime std.Uri.parse("https://api.axiom.co/v2/user") catch unreachable;
-
+    // Get does a get request and parses the (JSON) response.
+    // Caller is responsible for calling deinit() on the returned value.
+    fn get(self: *SDK, url: std.Uri, T: anytype) !Value(T) {
         var server_header_buffer: [8192]u8 = undefined; // 8kb
         var request = try self.http_client.open(.GET, url, .{
             .server_header_buffer = &server_header_buffer,
@@ -88,45 +87,29 @@ pub const SDK = struct {
         try request.send();
         try request.wait();
 
-        const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb
+        const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // TODO: Increase max size
         defer self.allocator.free(body);
 
         var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
-        const user = try json.parseFromSliceLeaky(User, arena_allocator.allocator(), body, .{
+        const value = try json.parseFromSliceLeaky(T, arena_allocator.allocator(), body, .{
             .allocate = .alloc_always,
         });
 
-        return Value(User){ .value = user, .allocator = arena_allocator };
+        return Value(T){ .value = value, .allocator = arena_allocator };
+    }
+
+    fn getCurrentUser(self: *SDK) !Value(User) {
+        // TODO: Store base URL in global const or struct
+        const url = comptime std.Uri.parse("https://api.axiom.co/v2/user") catch unreachable;
+        return self.get(url, User);
     }
 
     /// Get all datasets the token has access to.
     /// Caller owns the memory.
     fn getDatasets(self: *SDK) !Value([]Dataset) {
         // TODO: Store base URL in global const or struct
-        const url = comptime std.Uri.parse("https://api.axiom.co/v2/datasets") catch unreachable;
-
-        var server_header_buffer: [8192]u8 = undefined; // 8kb
-        var request = try self.http_client.open(.GET, url, .{
-            .server_header_buffer = &server_header_buffer,
-        });
-        defer request.deinit();
-
-        var authorization_header_buf: [64]u8 = undefined;
-        const authorization_header = try fmt.bufPrint(&authorization_header_buf, "Bearer {s}", .{self.api_token});
-        request.headers.authorization = .{ .override = authorization_header };
-
-        try request.send();
-        try request.wait();
-
-        const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb
-        defer self.allocator.free(body);
-
-        var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
-        const datasets = try json.parseFromSliceLeaky([]Dataset, arena_allocator.allocator(), body, .{
-            .allocate = .alloc_always,
-        });
-
-        return Value([]Dataset){ .value = datasets, .allocator = arena_allocator };
+        const uri = comptime std.Uri.parse("https://api.axiom.co/v2/datasets") catch unreachable;
+        return self.get(uri, []Dataset);
     }
 
     /// Caller owns the memory.
@@ -134,30 +117,8 @@ pub const SDK = struct {
         // TODO: Store base URL in global const or struct
         const uri_str = try std.fmt.allocPrint(self.allocator, "https://api.axiom.co/v2/datasets/{s}", .{name});
         defer self.allocator.free(uri_str);
-        const url = std.Uri.parse(uri_str) catch unreachable;
-
-        var server_header_buffer: [8192]u8 = undefined; // 8kb
-        var request = try self.http_client.open(.GET, url, .{
-            .server_header_buffer = &server_header_buffer,
-        });
-        defer request.deinit();
-
-        var authorization_header_buf: [64]u8 = undefined;
-        const authorization_header = try fmt.bufPrint(&authorization_header_buf, "Bearer {s}", .{self.api_token});
-        request.headers.authorization = .{ .override = authorization_header };
-
-        try request.send();
-        try request.wait();
-
-        const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb
-        defer self.allocator.free(body);
-
-        var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
-        const datasets = try json.parseFromSliceLeaky(Dataset, arena_allocator.allocator(), body, .{
-            .allocate = .alloc_always,
-        });
-
-        return Value(Dataset){ .value = datasets, .allocator = arena_allocator };
+        const uri = std.Uri.parse(uri_str) catch unreachable;
+        return self.get(uri, Dataset);
     }
 
     /// Caller owns the memory.
