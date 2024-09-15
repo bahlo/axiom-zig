@@ -1,8 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArrayList = std.ArrayList;
 const http = std.http;
 const fmt = std.fmt;
 const json = std.json;
+const gzip = std.compress.gzip;
 
 /// A dataset with metadata.
 pub const Dataset = struct { id: []const u8, name: []const u8, description: []const u8, who: []const u8, created: []const u8 };
@@ -180,12 +182,34 @@ pub const SDK = struct {
         const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb should be more than enough
         defer self.allocator.free(body);
 
+        // TODO: Handle error (code: u16, message: []const u8)
+
         var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
         const datasets = try json.parseFromSliceLeaky(IngestStatus, arena_allocator.allocator(), body, .{
             .allocate = .alloc_always,
         });
 
         return Value(IngestStatus){ .value = datasets, .allocator = arena_allocator };
+    }
+
+    pub fn ingestEvents(self: *SDK, dataset: []const u8, T: anytype, events: []T) !Value(IngestStatus) {
+        var buf = std.ArrayList(u8).init(self.allocator);
+        var compressor = try gzip.compressor(buf.writer(), .{});
+        var writer = compressor.writer();
+
+        for (events, 0..) |event, i| {
+            if (i > 0) {
+                _ = try writer.write("\n");
+            }
+            try std.json.stringify(event, .{}, writer);
+        }
+
+        try compressor.finish();
+
+        return self.ingestBuffer(dataset, buf.items, .{
+            .content_type = .ndjson,
+            .content_encoding = .gzip,
+        });
     }
 };
 
@@ -248,6 +272,30 @@ test "ingestBuffer" {
     defer sdk.deinit();
 
     var ingest_res = try sdk.ingestBuffer("axiom.zig", "[{\"foo\":42}]", .{});
+    defer ingest_res.deinit();
+    const ingest_status = ingest_res.value;
+
+    try std.testing.expectEqual(1, ingest_status.ingested);
+}
+
+test "ingestEvents" {
+    const allocator = std.testing.allocator;
+
+    const api_token = try std.process.getEnvVarOwned(allocator, "AXIOM_TOKEN");
+    defer allocator.free(api_token);
+
+    var sdk = SDK.init(allocator, api_token);
+    defer sdk.deinit();
+
+    const Event = struct { hello: []const u8 };
+
+    var events = ArrayList(Event).init(allocator);
+    defer events.deinit();
+    try events.append(Event{ .hello = "world" });
+    try events.append(Event{ .hello = "foo" });
+
+    const event_slice = try events.toOwnedSlice();
+    var ingest_res = try sdk.ingestEvents("axiom.zig", Event, event_slice);
     defer ingest_res.deinit();
     const ingest_status = ingest_res.value;
 
