@@ -111,7 +111,7 @@ pub const SDK = struct {
         return Value(T){ .value = value, .allocator = arena_allocator };
     }
 
-    fn getCurrentUser(self: *SDK) !Value(User) {
+    pub fn getCurrentUser(self: *SDK) !Value(User) {
         // TODO: Store base URL in global const or struct
         const url = comptime std.Uri.parse("https://api.axiom.co/v2/user") catch unreachable;
         return self.get(url, User);
@@ -119,14 +119,14 @@ pub const SDK = struct {
 
     /// Get all datasets the token has access to.
     /// Caller owns the memory.
-    fn getDatasets(self: *SDK) !Value([]Dataset) {
+    pub fn getDatasets(self: *SDK) !Value([]Dataset) {
         // TODO: Store base URL in global const or struct
         const uri = comptime std.Uri.parse("https://api.axiom.co/v2/datasets") catch unreachable;
         return self.get(uri, []Dataset);
     }
 
     /// Caller owns the memory.
-    fn getDataset(self: *SDK, name: []const u8) !Value(Dataset) {
+    pub fn getDataset(self: *SDK, name: []const u8) !Value(Dataset) {
         // TODO: Store base URL in global const or struct
         const uri_str = try std.fmt.allocPrint(self.allocator, "https://api.axiom.co/v2/datasets/{s}", .{name});
         defer self.allocator.free(uri_str);
@@ -135,7 +135,7 @@ pub const SDK = struct {
     }
 
     /// Caller owns the memory.
-    fn ingestBuffer(self: *SDK, dataset: []const u8, buffer: []const u8, opts: IngestOptions) !Value(IngestStatus) {
+    pub fn ingestBuffer(self: *SDK, dataset: []const u8, buffer: []const u8, opts: IngestOptions) !Value(IngestStatus) {
         // TODO: Store base URL in global const or struct
         const uri_str = try std.fmt.allocPrint(self.allocator, "https://api.axiom.co/v1/datasets/{s}/ingest", .{dataset});
         defer self.allocator.free(uri_str);
@@ -177,7 +177,7 @@ pub const SDK = struct {
         try request.finish();
         try request.wait();
 
-        const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb
+        const body = try request.reader().readAllAlloc(self.allocator, 1024 * 1024); // 1mb should be more than enough
         defer self.allocator.free(body);
 
         var arena_allocator = std.heap.ArenaAllocator.init(self.allocator);
